@@ -6,7 +6,6 @@ const FaceRecognition = () => {
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState('');
-  const [name, setName] = useState('');
   const [capturedImage, setCapturedImage] = useState(null);
   const [isWebViewMode, setIsWebViewMode] = useState(false);
   const videoRef = useRef(null);
@@ -22,6 +21,7 @@ const FaceRecognition = () => {
     const imageData = urlParams.get('image');
     const token = urlParams.get('token');
     const mode = urlParams.get('mode');
+    const walletAddress = urlParams.get('walletAddress');
     
     if (mode === 'webview') {
       setIsWebViewMode(true);
@@ -39,6 +39,10 @@ const FaceRecognition = () => {
             if (data.success) {
               setCapturedImage(data.imageData);
               setMessage('Image loaded from iOS app. Ready to process.');
+              // Store wallet address for later use
+              if (walletAddress) {
+                window.walletAddress = walletAddress;
+              }
             } else {
               setMessage('Error loading image: ' + data.error);
             }
@@ -50,6 +54,10 @@ const FaceRecognition = () => {
       } else if (imageData) {
         setCapturedImage(imageData);
         setMessage('Image loaded from iOS app. Ready to process.');
+        // Store wallet address for later use
+        if (walletAddress) {
+          window.walletAddress = walletAddress;
+        }
       }
     }
   };
@@ -106,13 +114,18 @@ const FaceRecognition = () => {
     console.log('Image loaded, dimensions:', img.width, 'x', img.height);
     console.log('Detecting face...');
     
-    const detection = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions())
+    // Use more lenient face detection options
+    const detection = await faceapi.detectSingleFace(img, new faceapi.TinyFaceDetectorOptions({
+      inputSize: 320, // Smaller input size for better detection
+      scoreThreshold: 0.3 // Lower threshold for better detection
+    }))
       .withFaceLandmarks()
       .withFaceDescriptor();
     
     console.log('Face detection result:', detection ? 'Face found' : 'No face found');
     if (detection) {
       console.log('Face descriptor length:', detection.descriptor.length);
+      console.log('Face detection confidence:', detection.score);
     }
     return detection;
   };
@@ -125,42 +138,65 @@ const FaceRecognition = () => {
 
 
   const registerFace = async () => {
-    if (!name.trim()) {
-      setMessage('Please enter a name');
-      return;
-    }
-
     setIsLoading(true);
     setMessage('');
 
     try {
-      let imageData;
+      let blob;
       if (isWebViewMode && capturedImage) {
-        imageData = capturedImage;
+        // Handle base64 data URL from mobile app
+        if (capturedImage.startsWith('data:')) {
+          const response = await fetch(capturedImage);
+          blob = await response.blob();
+        } else {
+          // Handle regular URL
+          const response = await fetch(capturedImage);
+          blob = await response.blob();
+        }
       } else {
-        imageData = capturePhoto();
+        // Handle camera capture
+        const imageData = capturePhoto();
+        const response = await fetch(imageData);
+        blob = await response.blob();
       }
       
-      const response = await fetch(imageData);
-      const blob = await response.blob();
-      
+      console.log('Processing image blob:', blob.type, blob.size);
+      console.log('Image dimensions check - blob size:', blob.size, 'bytes');
       const detection = await detectFace(blob);
       
       if (!detection) {
-        setMessage('No face detected in the image');
+        setMessage('No face detected in the image. Try: 1) Better lighting 2) Face the camera directly 3) Remove glasses/masks 4) Capture a clearer image');
         setIsLoading(false);
         return;
       }
 
       const embedding = Array.from(detection.descriptor);
+      const walletAddress = window.walletAddress || 'unknown';
       
+      // First, check if user exists and create if needed
+      try {
+        const userResponse = await axios.get(`http://10.161.2.236:3001/api/user/${walletAddress}`);
+        
+        if (!userResponse.data.exists) {
+          // User doesn't exist, create them
+          await axios.post('http://10.161.2.236:3001/api/user', {
+            walletAddress: walletAddress
+          });
+          console.log('User created successfully');
+        }
+      } catch (userError) {
+        console.error('Error handling user creation:', userError);
+        // Continue with registration even if user creation fails
+        // The backend will handle the case where user doesn't exist
+      }
+      
+      // Now register the face
       await axios.post('http://10.161.2.236:3001/api/register', {
-        name: name.trim(),
+        walletAddress: walletAddress,
         embedding: embedding
       });
 
-      setMessage(`Face registered successfully for ${name}`);
-      setName('');
+      setMessage('Face registered successfully');
       
       // If in WebView mode, close the WebView after successful registration
       if (isWebViewMode) {
@@ -168,7 +204,7 @@ const FaceRecognition = () => {
           if (window.ReactNativeWebView) {
             window.ReactNativeWebView.postMessage(JSON.stringify({
               type: 'registration_success',
-              message: `Face registered successfully for ${name}`
+              message: 'Face registered successfully'
             }));
           }
         }, 2000);
@@ -185,20 +221,30 @@ const FaceRecognition = () => {
     setMessage('');
 
     try {
-      let imageData;
+      let blob;
       if (isWebViewMode && capturedImage) {
-        imageData = capturedImage;
+        // Handle base64 data URL from mobile app
+        if (capturedImage.startsWith('data:')) {
+          const response = await fetch(capturedImage);
+          blob = await response.blob();
+        } else {
+          // Handle regular URL
+          const response = await fetch(capturedImage);
+          blob = await response.blob();
+        }
       } else {
-        imageData = capturePhoto();
+        // Handle camera capture
+        const imageData = capturePhoto();
+        const response = await fetch(imageData);
+        blob = await response.blob();
       }
       
-      const response = await fetch(imageData);
-      const blob = await response.blob();
-      
+      console.log('Processing image blob for verification:', blob.type, blob.size);
+      console.log('Verification image dimensions check - blob size:', blob.size, 'bytes');
       const detection = await detectFace(blob);
       
       if (!detection) {
-        setMessage('No face detected in the image');
+        setMessage('No face detected in the image. Try: 1) Better lighting 2) Face the camera directly 3) Remove glasses/masks 4) Capture a clearer image');
         setIsLoading(false);
         return;
       }
@@ -211,7 +257,7 @@ const FaceRecognition = () => {
       });
 
       if (result.data.match) {
-        setMessage(`Face verified! Welcome ${result.data.name} (Similarity: ${(result.data.similarity * 100).toFixed(1)}%)`);
+        setMessage(`Face verified! Welcome (Similarity: ${(result.data.similarity * 100).toFixed(1)}%)`);
         
         // If in WebView mode, send result back to iOS app
         if (isWebViewMode) {
@@ -219,9 +265,9 @@ const FaceRecognition = () => {
             if (window.ReactNativeWebView) {
               window.ReactNativeWebView.postMessage(JSON.stringify({
                 type: 'verification_success',
-                name: result.data.name,
+                walletAddress: result.data.walletAddress,
                 similarity: result.data.similarity,
-                message: `Face verified! Welcome ${result.data.name}`
+                message: 'Face verified! Welcome'
               }));
             }
           }, 2000);
@@ -320,17 +366,6 @@ const FaceRecognition = () => {
 
         {/* Controls Section */}
         <div className="space-y-6">
-          <div>
-            <label className="block text-sm font-medium mb-2">Name (for registration):</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Enter your name"
-              className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
           <div className="space-y-3">
             <button
               onClick={registerFace}

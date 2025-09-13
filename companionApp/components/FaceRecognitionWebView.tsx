@@ -26,7 +26,7 @@ export default function FaceRecognitionWebView({ onResult }: FaceRecognitionWebV
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [4, 3],
-        quality: 0.8,
+        quality: 0.9, // Higher quality for better face detection
         base64: true,
       });
 

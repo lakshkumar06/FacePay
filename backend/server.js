@@ -18,11 +18,21 @@ app.use(express.json({ limit: '50mb' })); // Increase body size limit
 // Initialize SQLite database
 const db = new sqlite3.Database('./face_embeddings.db');
 
-// Create table for face embeddings
+// Create tables for users and face embeddings
 db.serialize(() => {
+  // Users table for tracking registration status
+  db.run(`CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    wallet_address TEXT UNIQUE NOT NULL,
+    face_registered BOOLEAN DEFAULT FALSE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  )`);
+  
+  // Face embeddings table (keep existing structure)
   db.run(`CREATE TABLE IF NOT EXISTS face_embeddings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
+    wallet_address TEXT NOT NULL,
     embedding TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   )`);
@@ -38,7 +48,7 @@ const imageStore = new Map();
 app.post('/api/store-image', (req, res) => {
   try {
     console.log('Received image upload request');
-    const { imageData } = req.body;
+    const { imageData, walletAddress, isRegister } = req.body;
     
     if (!imageData) {
       console.log('No image data provided');
@@ -46,6 +56,8 @@ app.post('/api/store-image', (req, res) => {
     }
     
     console.log('Image data length:', imageData.length);
+    console.log('Wallet address:', walletAddress);
+    console.log('Is register:', isRegister);
     
     // Check if image data is too large (limit to 10MB)
     if (imageData.length > 10 * 1024 * 1024) {
@@ -56,8 +68,12 @@ app.post('/api/store-image', (req, res) => {
     // Generate a unique token
     const token = Date.now().toString(36) + Math.random().toString(36).substr(2);
     
-    // Store the image data with the token
-    imageStore.set(token, imageData);
+    // Store the image data with the token and additional metadata
+    imageStore.set(token, { 
+      imageData, 
+      walletAddress: walletAddress || null, 
+      isRegister: isRegister || false 
+    });
     
     console.log('Image stored with token:', token);
     
@@ -81,7 +97,12 @@ app.get('/api/get-image/:token', (req, res) => {
     return res.status(404).json({ error: 'Image not found or expired' });
   }
   
-  res.json({ success: true, imageData });
+  // Handle both old format (string) and new format (object)
+  if (typeof imageData === 'string') {
+    res.json({ success: true, imageData });
+  } else {
+    res.json({ success: true, imageData: imageData.imageData });
+  }
 });
 
 // Cosine similarity function
@@ -114,25 +135,96 @@ function cosineSimilarity(vecA, vecB) {
 }
 
 // Routes
-app.post('/api/register', (req, res) => {
-  const { name, embedding } = req.body;
+// Check if user exists and get registration status
+app.get('/api/user/:walletAddress', (req, res) => {
+  const { walletAddress } = req.params;
   
-  if (!name || !embedding) {
-    return res.status(400).json({ error: 'Name and embedding are required' });
+  db.get('SELECT wallet_address, face_registered FROM users WHERE wallet_address = ?', [walletAddress], (err, row) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    
+    if (row) {
+      res.json({
+        success: true,
+        exists: true,
+        walletAddress: row.wallet_address,
+        faceRegistered: row.face_registered
+      });
+    } else {
+      res.json({
+        success: true,
+        exists: false
+      });
+    }
+  });
+});
+
+// Create new user (after Phantom connection)
+app.post('/api/user', (req, res) => {
+  const { walletAddress } = req.body;
+  
+  if (!walletAddress) {
+    return res.status(400).json({ error: 'Wallet address is required' });
   }
   
-  const stmt = db.prepare('INSERT INTO face_embeddings (name, embedding) VALUES (?, ?)');
-  stmt.run(name, JSON.stringify(embedding), function(err) {
+  const stmt = db.prepare('INSERT INTO users (wallet_address) VALUES (?)');
+  stmt.run(walletAddress, function(err) {
     if (err) {
+      if (err.message.includes('UNIQUE constraint failed')) {
+        return res.status(409).json({ error: 'User already exists' });
+      }
       return res.status(500).json({ error: err.message });
     }
     res.json({ 
       success: true, 
       id: this.lastID,
-      message: `Face registered for ${name}` 
+      message: 'User created successfully' 
     });
   });
   stmt.finalize();
+});
+
+// Register face for existing user
+app.post('/api/register', (req, res) => {
+  const { walletAddress, embedding } = req.body;
+  
+  if (!walletAddress || !embedding) {
+    return res.status(400).json({ error: 'Wallet address and embedding are required' });
+  }
+  
+  // First, check if user exists
+  db.get('SELECT id FROM users WHERE wallet_address = ?', [walletAddress], (err, user) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    
+    if (!user) {
+      return res.status(404).json({ error: 'User not found. Please connect wallet first.' });
+    }
+    
+    // Insert face embedding
+    const stmt = db.prepare('INSERT INTO face_embeddings (wallet_address, embedding) VALUES (?, ?)');
+    stmt.run(walletAddress, JSON.stringify(embedding), function(err) {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      
+      // Update user's face_registered status
+      db.run('UPDATE users SET face_registered = TRUE, updated_at = CURRENT_TIMESTAMP WHERE wallet_address = ?', [walletAddress], (err) => {
+        if (err) {
+          console.error('Error updating user face_registered status:', err);
+        }
+        
+        res.json({ 
+          success: true, 
+          id: this.lastID,
+          message: 'Face registered successfully' 
+        });
+      });
+    });
+    stmt.finalize();
+  });
 });
 
 app.post('/api/verify', (req, res) => {
@@ -142,7 +234,7 @@ app.post('/api/verify', (req, res) => {
     return res.status(400).json({ error: 'Embedding is required' });
   }
   
-  db.all('SELECT id, name, embedding FROM face_embeddings', [], (err, rows) => {
+  db.all('SELECT id, wallet_address, embedding FROM face_embeddings', [], (err, rows) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }
@@ -157,7 +249,7 @@ app.post('/api/verify', (req, res) => {
           bestSimilarity = similarity;
           bestMatch = {
             id: row.id,
-            name: row.name,
+            walletAddress: row.wallet_address,
             similarity: similarity
           };
         }
@@ -183,7 +275,7 @@ app.post('/api/verify', (req, res) => {
 });
 
 app.get('/api/faces', (req, res) => {
-  db.all('SELECT id, name, created_at FROM face_embeddings ORDER BY created_at DESC', [], (err, rows) => {
+  db.all('SELECT id, wallet_address, created_at FROM face_embeddings ORDER BY created_at DESC', [], (err, rows) => {
     if (err) {
       return res.status(500).json({ error: err.message });
     }

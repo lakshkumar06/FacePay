@@ -5,14 +5,15 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "companionapp",
+    "scheme": "facepay",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
       "infoPlist": {
         "NSCameraUsageDescription": "This app needs access to camera to register your face for payments."
-      }
+      },
+      "associatedDomains": ["applinks:phantom.app"]
     },
     "android": {
       "adaptiveIcon": {
