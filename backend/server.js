@@ -45,6 +45,12 @@ const upload = multer({ storage: storage });
 // Store base64 images temporarily
 const imageStore = new Map();
 
+// Store pending transaction requests for buyer's app
+const transactionRequests = new Map();
+
+// Simple payment status tracking by wallet address
+const paymentStatus = new Map();
+
 app.post('/api/store-image', (req, res) => {
   try {
     console.log('Received image upload request');
@@ -281,6 +287,142 @@ app.get('/api/faces', (req, res) => {
     }
     res.json(rows);
   });
+});
+
+// Transaction request endpoint - vendor sends transaction request to buyer
+app.post('/api/transaction-request', (req, res) => {
+  try {
+    const { walletAddress, amount, recipient, similarity, message, timestamp, status } = req.body;
+    
+    if (!walletAddress) {
+      return res.status(400).json({ error: 'Wallet address is required' });
+    }
+    
+    // Generate a unique transaction ID for the transaction request (iOS app still needs this)
+    const transactionId = Date.now().toString(36) + Math.random().toString(36).substr(2);
+    
+    // Store transaction request
+    transactionRequests.set(transactionId, {
+      walletAddress,
+      amount,
+      recipient,
+      similarity,
+      message,
+      timestamp,
+      status: status || 'pending',
+      transactionId,
+      shown: false // Track if this transaction has been shown to the user
+    });
+    
+    // Set simple payment status for this wallet
+    paymentStatus.set(walletAddress, {
+      status: 'waiting',
+      transactionId,
+      amount,
+      recipient,
+      timestamp: Date.now()
+    });
+    
+    
+    // Clean up after 10 minutes
+    setTimeout(() => {
+      transactionRequests.delete(transactionId);
+      paymentStatus.delete(walletAddress);
+    }, 10 * 60 * 1000);
+    
+    res.json({ 
+      success: true, 
+      transactionId,
+      message: 'Transaction request sent to buyer\'s app' 
+    });
+  } catch (error) {
+    console.error('Error handling transaction request:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get pending transaction requests for buyer's app
+app.get('/api/pending-transactions/:walletAddress', (req, res) => {
+  try {
+    const { walletAddress } = req.params;
+    
+    // Find all pending transactions for this wallet that haven't been shown yet
+    const pendingTransactions = Array.from(transactionRequests.values())
+      .filter(tx => tx.walletAddress === walletAddress && tx.status === 'pending' && !tx.shown)
+      .sort((a, b) => b.timestamp - a.timestamp); // Most recent first
+    
+    // Mark these transactions as shown but DON'T remove them yet
+    // We need to keep them for status updates
+    pendingTransactions.forEach(tx => {
+      tx.shown = true; // Mark as shown to prevent duplicate notifications
+    });
+    
+    res.json({
+      success: true,
+      transactions: pendingTransactions
+    });
+  } catch (error) {
+    console.error('Error fetching pending transactions:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Update transaction status (when buyer confirms/cancels)
+app.post('/api/transaction-status/:transactionId', (req, res) => {
+  try {
+    const { transactionId } = req.params;
+    const { status, signature } = req.body;
+    
+    if (transactionRequests.has(transactionId)) {
+      const transaction = transactionRequests.get(transactionId);
+      transaction.status = status;
+      if (signature) {
+        transaction.signature = signature;
+      }
+      
+      // Also update the simple payment status for this wallet
+      if (paymentStatus.has(transaction.walletAddress)) {
+        const payment = paymentStatus.get(transaction.walletAddress);
+        payment.status = status;
+        if (signature) {
+          payment.signature = signature;
+        }
+      }
+      
+      res.json({ success: true, message: 'Transaction status updated' });
+    } else {
+      res.status(404).json({ error: 'Transaction not found' });
+    }
+  } catch (error) {
+    console.error('Error updating transaction status:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Get payment status by wallet address (vendor checks status)
+app.get('/api/payment-status/:walletAddress', (req, res) => {
+  try {
+    const { walletAddress } = req.params;
+    
+    if (paymentStatus.has(walletAddress)) {
+      const status = paymentStatus.get(walletAddress);
+      
+      res.json({
+        success: true,
+        status: status.status,
+        payment: status
+      });
+    } else {
+      res.json({
+        success: true,
+        status: 'none',
+        message: 'No payment pending'
+      });
+    }
+  } catch (error) {
+    console.error('Error checking payment status:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {

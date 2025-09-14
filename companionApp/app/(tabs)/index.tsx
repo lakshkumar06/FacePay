@@ -7,6 +7,7 @@ import { IconSymbol } from '@/components/ui/icon-symbol';
 import { WebView } from 'react-native-webview';
 import * as ImagePicker from 'expo-image-picker';
 import { useWallet } from '@/contexts/WalletContext';
+import { Connection, PublicKey, Transaction, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 export default function HomeScreen() {
   const [facing, setFacing] = useState<CameraType>('front');
@@ -19,19 +20,158 @@ export default function HomeScreen() {
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isRegisterMode, setIsRegisterMode] = useState(false);
   const [userStatus, setUserStatus] = useState<'not_registered' | 'wallet_connected' | 'face_registered'>('not_registered');
+  const [pendingTransaction, setPendingTransaction] = useState<any>(null);
+  const [isProcessingTransaction, setIsProcessingTransaction] = useState(false);
+  const [shownTransactions, setShownTransactions] = useState<Set<string>>(new Set());
+  const [isShowingAlert, setIsShowingAlert] = useState(false);
+  const pollingEnabledRef = useRef(true);
   const cameraRef = useRef<CameraView>(null);
 
   // Wallet connection
-  const { isConnected, walletAddress, connect, disconnect, isLoading: walletLoading, error: walletError } = useWallet();
+  const { 
+    isConnected, 
+    walletAddress, 
+    connect, 
+    disconnect, 
+    signTransaction,
+    isLoading: walletLoading, 
+    error: walletError,
+    isSubmittingTransaction,
+    lastTransactionSignature
+  } = useWallet();
 
   // Check user status when wallet connects
   useEffect(() => {
     if (isConnected && walletAddress) {
       checkUserStatus();
+      // Reset polling state when wallet connects
+      pollingEnabledRef.current = true;
+      setIsShowingAlert(false);
     } else {
       setUserStatus('not_registered');
+      pollingEnabledRef.current = false;
     }
   }, [isConnected, walletAddress]);
+
+  // Poll for pending transactions when wallet is connected
+  useEffect(() => {
+    if (!isConnected || !walletAddress) return;
+
+    
+    const pollInterval = setInterval(async () => {
+      try {
+        // Skip if polling is disabled or already showing an alert
+        if (!pollingEnabledRef.current || isShowingAlert) {
+          return;
+        }
+        
+        const response = await fetch(`http://10.161.2.236:3001/api/pending-transactions/${walletAddress}`);
+        const data = await response.json();
+        
+        if (data.success && data.transactions.length > 0) {
+          // Show only new transactions that haven't been shown yet
+          const newTransactions = data.transactions.filter(
+            (tx: any) => !shownTransactions.has(tx.transactionId)
+          );
+          
+          if (newTransactions.length > 0) {
+            const latestTransaction = newTransactions[0];
+            
+            // STOP POLLING IMMEDIATELY when transaction is found
+            pollingEnabledRef.current = false;
+            
+            // Mark this transaction as shown immediately
+            setShownTransactions(prev => new Set([...prev, latestTransaction.transactionId]));
+            
+            // Set alert flag to prevent duplicate alerts
+            setIsShowingAlert(true);
+            
+            // Show transaction confirmation dialog
+            Alert.alert(
+              'Payment Request',
+              `Face verified! Send ${latestTransaction.amount} SOL to ${latestTransaction.recipient.substring(0, 8)}...?\n\nSimilarity: ${(latestTransaction.similarity * 100).toFixed(1)}%`,
+              [
+                {
+                  text: 'Cancel',
+                  style: 'cancel',
+                  onPress: () => {
+                    // Update transaction status to cancelled
+                    fetch(`http://10.161.2.236:3001/api/transaction-status/${latestTransaction.transactionId}`, {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ status: 'cancelled' })
+                    }).catch(error => {
+                      console.error('Error sending cancellation status:', error);
+                    });
+                    // Reset flags and restart polling
+                    setIsShowingAlert(false);
+                    pollingEnabledRef.current = true;
+                  }
+                },
+                {
+                  text: 'Confirm Payment',
+                  style: 'default',
+                  onPress: () => {
+                    // Reset flags and restart polling
+                    setIsShowingAlert(false);
+                    pollingEnabledRef.current = true;
+                    processTransaction(latestTransaction);
+                  }
+                }
+              ],
+              {
+                onDismiss: () => {
+                  // Reset flags and restart polling
+                  setIsShowingAlert(false);
+                  pollingEnabledRef.current = true;
+                }
+              }
+            );
+          }
+        }
+      } catch (error) {
+        console.error('❌ Error polling for transactions:', error);
+      }
+    }, 3000); // Poll every 3 seconds
+
+    return () => {
+      clearInterval(pollInterval);
+    };
+  }, [isConnected, walletAddress]);
+
+  // Handle transaction completion
+  useEffect(() => {
+    if (lastTransactionSignature && !isSubmittingTransaction && pendingTransaction) {
+      console.log('Transaction completed:', lastTransactionSignature);
+      
+      // Update transaction status in backend
+      fetch(`http://10.161.2.236:3001/api/transaction-status/${pendingTransaction.transactionId}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          status: 'completed',
+          signature: lastTransactionSignature
+        })
+      }).catch(error => {
+        console.error('Error sending completion status:', error);
+      });
+
+      Alert.alert(
+        'Payment Successful! 🎉',
+        `Successfully sent ${pendingTransaction.amount} SOL to ${pendingTransaction.recipient.substring(0, 8)}...`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setPendingTransaction(null);
+              setShowWebView(false);
+              setIsProcessingTransaction(false);
+            }
+          }
+        ]
+      );
+    }
+  }, [lastTransactionSignature, isSubmittingTransaction, pendingTransaction]);
 
   const checkUserStatus = async () => {
     if (!walletAddress) return;
@@ -75,6 +215,74 @@ export default function HomeScreen() {
       }
     } catch (error) {
       console.error('Error creating user:', error);
+    }
+  };
+
+  const processTransaction = async (transactionData: any) => {
+    try {
+      setIsProcessingTransaction(true);
+      setPendingTransaction(transactionData);
+      
+      // Create Solana connection (devnet for testing)
+      const connection = new Connection('https://api.devnet.solana.com');
+      
+      // Get recent blockhash
+      const { blockhash } = await connection.getLatestBlockhash();
+      
+      // Create transaction
+      const transaction = new Transaction({
+        recentBlockhash: blockhash,
+        feePayer: new PublicKey(walletAddress!),
+      });
+      
+      // Add transfer instruction
+      const recipientPublicKey = new PublicKey(transactionData.recipient);
+      const lamports = transactionData.amount * LAMPORTS_PER_SOL;
+      
+      transaction.add(
+        SystemProgram.transfer({
+          fromPubkey: new PublicKey(walletAddress!),
+          toPubkey: recipientPublicKey,
+          lamports: lamports,
+        })
+      );
+      
+      // Sign transaction using Phantom wallet via deeplink
+      await signTransaction(transaction);
+      
+    } catch (error) {
+      console.error('Transaction error:', error);
+      
+      // Update transaction status to failed in backend
+      if (transactionData.transactionId) {
+        try {
+          await fetch(`http://10.161.2.236:3001/api/transaction-status/${transactionData.transactionId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              status: 'failed',
+              error: (error as Error).message
+            })
+          });
+        } catch (fetchError) {
+          console.error('Error sending failure status to backend:', fetchError);
+        }
+      }
+      
+      Alert.alert(
+        'Transaction Failed',
+        (error as Error).message || 'Failed to process payment',
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setPendingTransaction(null);
+            }
+          }
+        ]
+      );
+      
+      setIsProcessingTransaction(false);
     }
   };
 
@@ -147,7 +355,7 @@ export default function HomeScreen() {
           }
         } catch (uploadError) {
           console.error('Upload error:', uploadError);
-          Alert.alert('Error', 'Failed to upload image: ' + uploadError.message);
+          Alert.alert('Error', 'Failed to upload image: ' + (uploadError as Error).message);
         }
       }
     } catch (error) {
@@ -172,14 +380,61 @@ export default function HomeScreen() {
 
   const handleWebViewMessage = (event: any) => {
     try {
+      console.log('📨 WebView message received:', event.nativeEvent.data);
       const data = JSON.parse(event.nativeEvent.data);
+      console.log('📋 Parsed message data:', data);
       
       switch (data.type) {
+        case 'test_message':
+          console.log('🧪 Test message received from WebView:', data.message);
+          Alert.alert('WebView Test', data.message);
+          break;
         case 'registration_success':
           Alert.alert('Account Created!', 'Your face has been registered successfully.');
           setShowWebView(false);
           setMessage('Account created successfully!');
           setUserStatus('face_registered');
+          break;
+        case 'transaction_request':
+          console.log('💰 Transaction request received:', data);
+          console.log('📊 Transaction details:', {
+            amount: data.amount,
+            recipient: data.recipient,
+            walletAddress: data.walletAddress,
+            similarity: data.similarity,
+            similarityPercent: (data.similarity * 100).toFixed(1) + '%'
+          });
+          setPendingTransaction(data);
+          
+          // Show transaction confirmation dialog
+          Alert.alert(
+            'Payment Confirmation',
+            `Face verified! Send ${data.amount} SOL to ${data.recipient.substring(0, 8)}...?\n\nSimilarity: ${(data.similarity * 100).toFixed(1)}%`,
+            [
+              {
+                text: 'Cancel',
+                style: 'cancel',
+                onPress: () => {
+                  console.log('❌ User cancelled transaction');
+                  setPendingTransaction(null);
+                  setShowWebView(false);
+                }
+              },
+              {
+                text: 'Confirm Payment',
+                style: 'default',
+                onPress: () => {
+                  console.log('✅ User confirmed transaction, processing...');
+                  processTransaction(data);
+                }
+              }
+            ]
+          );
+          break;
+        case 'verification_failed':
+          Alert.alert('Payment Cancelled', data.message);
+          setShowWebView(false);
+          setMessage('Payment cancelled - Face not recognized');
           break;
         case 'error':
           Alert.alert('Error', data.message);
@@ -278,6 +533,14 @@ export default function HomeScreen() {
               {walletError && (
                 <View style={styles.errorContainer}>
                   <ThemedText style={styles.errorText}>{walletError}</ThemedText>
+                </View>
+              )}
+              
+              {isProcessingTransaction && (
+                <View style={styles.transactionProcessing}>
+                  <ActivityIndicator size="large" color="#007AFF" />
+                  <ThemedText style={styles.processingText}>Processing Payment...</ThemedText>
+                  <ThemedText style={styles.processingSubtext}>Please wait while we confirm your transaction</ThemedText>
                 </View>
               )}
             </View>
@@ -508,6 +771,27 @@ const styles = StyleSheet.create({
   },
   messageText: {
     fontSize: 14,
+    textAlign: 'center',
+  },
+  transactionProcessing: {
+    backgroundColor: '#f0f8ff',
+    padding: 20,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 16,
+    borderWidth: 1,
+    borderColor: '#007AFF',
+  },
+  processingText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#007AFF',
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  processingSubtext: {
+    fontSize: 12,
+    color: '#666',
     textAlign: 'center',
   },
 });
