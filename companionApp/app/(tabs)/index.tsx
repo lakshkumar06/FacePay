@@ -344,8 +344,8 @@ export default function HomeScreen() {
           if (uploadResult.success) {
             console.log('Image uploaded, token:', uploadResult.token);
             
-            // Create WebView URL with token and wallet address
-            const webViewUrl = `http://10.161.2.236:5173/?mode=webview&token=${uploadResult.token}&walletAddress=${walletAddress}`;
+            // Create WebView URL with token and wallet address for registration page
+            const webViewUrl = `http://10.161.2.236:5173/?page=register&mode=webview&token=${uploadResult.token}&walletAddress=${walletAddress}`;
             console.log('WebView URL:', webViewUrl);
             
             setWebViewUrl(webViewUrl);
