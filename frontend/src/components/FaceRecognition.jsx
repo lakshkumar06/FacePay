@@ -569,12 +569,30 @@ const FaceRecognition = () => {
 
   return (
     <div className="min-h-screen bg-white">
-      <div className="max-w-4xl mx-auto p-6">
-        {/* Header */}
-        <div className="text-center mb-8">
-          <h1 className="text-4xl font-bold text-black mb-2">FacePay Checkout</h1>
-          <p className="text-gray-600">Secure payment with facial recognition</p>
+              {/* Navbar */}
+              <div className="flex items-center justify-center mb-8 shadow-md py-4">
+          <div className="flex items-center space-x-4">
+            {/* SVG Placeholder */}
+            <div className="">
+            <svg width="40" height="40" viewBox="0 0 79 79" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M62.5413 39.4999C62.5413 39.4999 52.2384 52.6666 39.4997 52.6666C26.7609 52.6666 16.458 39.4999 16.458 39.4999C16.458 39.4999 26.7609 26.3333 39.4997 26.3333C52.2384 26.3333 62.5413 39.4999 62.5413 39.4999ZM39.4997 32.9166C38.1976 32.9166 36.9248 33.3027 35.8422 34.0261C34.7595 34.7495 33.9157 35.7776 33.4175 36.9806C32.9192 38.1835 32.7888 39.5072 33.0428 40.7843C33.2969 42.0613 33.9239 43.2343 34.8446 44.155C35.7653 45.0757 36.9383 45.7027 38.2153 45.9568C39.4924 46.2108 40.8161 46.0804 42.019 45.5821C43.222 45.0838 44.2501 44.24 44.9735 43.1574C45.6969 42.0748 46.083 40.802 46.083 39.4999C46.083 37.7539 45.3894 36.0794 44.1548 34.8448C42.9202 33.6102 41.2457 32.9166 39.4997 32.9166Z" stroke="black" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M9.875 23.0417V13.1667C9.875 12.2937 10.2218 11.4564 10.8391 10.8391C11.4564 10.2218 12.2937 9.875 13.1667 9.875H23.0417" stroke="black" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M69.1247 23.0417V13.1667C69.1247 12.2937 68.7779 11.4564 68.1606 10.8391C67.5433 10.2218 66.706 9.875 65.833 9.875H55.958" stroke="black" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M9.875 55.9583V65.8333C9.875 66.7063 10.2218 67.5435 10.8391 68.1608C11.4564 68.7781 12.2937 69.1249 13.1667 69.1249H23.0417" stroke="black" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M69.1247 55.9583V65.8333C69.1247 66.7063 68.7779 67.5435 68.1606 68.1608C67.5433 68.7781 66.706 69.1249 65.833 69.1249H55.958" stroke="black" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
+
+            </div>
+            
+            {/* Vertical Line */}
+            <div className="w-px h-8 bg-gray-300"></div>
+            
+            {/* Checkout Heading */}
+            <h1 className="text-3xl font-medium text-black">Checkout</h1>
+          </div>
         </div>
+      <div className="max-w-4xl mx-auto p-6">
+
 
         {/* Checkout Card */}
         <div className="bg-gray-50 rounded-lg border border-gray-200 p-8">
@@ -632,14 +650,14 @@ const FaceRecognition = () => {
 
         {/* Footer */}
         <div className="text-center mt-8 text-gray-500 text-sm">
-          <p>Powered by FacePay • Secure facial recognition payments</p>
+          <p>Powered by Gaze</p>
         </div>
       </div>
 
       {/* Payment Modal */}
       {isModalOpen && (
-        <div className="fixed inset-0 bg-[#13131377] flex items-center justify-center z-50">
-          <div className="bg-white rounded-[20px] py-10 px-20 max-w-4xl w-full mx-4">
+        <div className="fixed inset-0 bg-[#13131377] flex items-center justify-center z-50 animate-fade-in">
+          <div className="bg-white rounded-[20px] py-10 px-20 max-w-4xl w-full mx-4 animate-slide-up">
             <div className="text-center mb-6">
               <h2 className="text-2xl font-bold text-black mb-2">Face Verification</h2>
               <p className="text-gray-600">
@@ -703,7 +721,7 @@ const FaceRecognition = () => {
                     ref={modalVideoRef}
                     autoPlay
                     muted
-                    className="w-fit h-96 object-contain rounded-[10px] border border-[#5a5a5a] mx-auto"
+                    className="w-full h-96 object-contain rounded-[10px] border border-[#5a5a5a] mx-auto"
                     style={{ display: 'block' }}
                   />
                   <canvas
@@ -711,7 +729,7 @@ const FaceRecognition = () => {
                     className="hidden"
                   />
                   {/* Camera status indicator - positioned at bottom right */}
-                  <div className="absolute bottom-2 right-32">
+                  <div className="absolute bottom-2 right-3">
                     <div className="bg-black bg-opacity-50 text-white px-2 py-1 rounded text-xs">
                       Camera Active
                     </div>
