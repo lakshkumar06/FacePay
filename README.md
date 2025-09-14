@@ -50,13 +50,19 @@ No cards, no QR codes, no extra steps — just glance → approve → done.
 
 ### Smart Contract (Solana)
 - **Language**: Rust
-- **Framework**: Anchor
+- **Framework**: Anchor v0.31.0
 - **Network**: Solana Devnet
-- **Program**: FacePay Program for handling payment transactions
+- **Program ID**: `BDxWn2UWjfanhXvCWxzRoJjbDRqeVmd28rU3gADt23k`
+- **Instruction**: `buy` - Transfers 0.01 SOL (10,000,000 lamports) from payer to merchant
 - **Features**: 
-  - Wallet address validation
-  - Payment amount verification
-  - Transaction signing
+  - Fixed payment amount (0.01 SOL)
+  - Cross-Program Invocation (CPI) using System Program
+  - Event emission with transaction details
+  - Timestamp recording for audit trail
+- **Accounts Required**:
+  - `payer` (mutable, signer) - Customer's wallet
+  - `merchant` (mutable) - Merchant's wallet address
+  - `system_program` - Solana System Program for transfers
 
 ### Backend
 - **Runtime**: Node.js
@@ -137,6 +143,46 @@ Response:
 }
 ```
 
+## Smart Contract Integration
+
+### FacePay Program Interaction
+```typescript
+// Program ID and instruction
+const PROGRAM_ID = "BDxWn2UWjfanhXvCWxzRoJjbDRqeVmd28rU3gADt23k";
+const instruction = "buy";
+
+// Transaction accounts
+const accounts = {
+  payer: customerWallet.publicKey,     // Customer's wallet (signer)
+  merchant: merchantWallet.publicKey,  // Merchant's wallet
+  systemProgram: SystemProgram.programId
+};
+
+// Execute payment transaction
+const transaction = await program.methods
+  .buy()
+  .accounts(accounts)
+  .rpc();
+```
+
+### Purchase Event
+```typescript
+interface PurchaseEvent {
+  buyer: PublicKey;      // Customer's wallet address
+  merchant: PublicKey;   // Merchant's wallet address
+  amount: number;        // 10,000,000 lamports (0.01 SOL)
+  timestamp: number;     // Unix timestamp
+}
+```
+
+### Transaction Flow
+1. **Face Recognition**: Backend matches face to user wallet
+2. **Payment Request**: Generate QR code with merchant details
+3. **Mobile Approval**: User taps to approve in companion app
+4. **Smart Contract Call**: `buy()` instruction executed
+5. **Event Emission**: `Purchase` event logged on-chain
+6. **Confirmation**: Transaction signature returned
+
 ## Security Considerations
 
 ### Face Data Privacy
@@ -216,7 +262,7 @@ VITE_SOLANA_RPC_URL=https://api.devnet.solana.com
 
 # Mobile
 EXPO_PUBLIC_API_URL=http://localhost:3001
-EXPO_PUBLIC_PROGRAM_ID=<your-program-id>
+EXPO_PUBLIC_PROGRAM_ID=BDxWn2UWjfanhXvCWxzRoJjbDRqeVmd28rU3gADt23k
 ```
 
 ## Challenges we ran into
